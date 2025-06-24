@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>바람의나라 스타일 RPG - 전투 시스템</title>
+    <title>바람의나라 스타일 RPG - 충돌 시스템 개선</title>
     <style>
         body {
             margin: 0;
@@ -18,6 +18,7 @@
         
         .game-container {
             text-align: center;
+            position: relative;
         }
         
         canvas {
@@ -63,11 +64,52 @@
             background-color: #e74c3c;
             transition: width 0.3s;
         }
+        
+        .game-over-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+        
+        .game-over-text {
+            color: #e74c3c;
+            font-size: 48px;
+            font-weight: bold;
+            margin-bottom: 30px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+        
+        .restart-button {
+            background-color: #e74c3c;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 20px;
+            font-weight: bold;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        
+        .restart-button:hover {
+            background-color: #c0392b;
+        }
     </style>
 </head>
 <body>
     <div class="game-container">
         <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div class="game-over-overlay" id="gameOverOverlay">
+            <div class="game-over-text">GAME OVER</div>
+            <button class="restart-button" onclick="restartGame()">다시하기</button>
+        </div>
         <div class="controls">
             <strong>조작법:</strong> 방향키로 이동 | 스페이스바로 공격 | 보라색 포탈로 맵 이동
         </div>
@@ -93,6 +135,8 @@
         const MOVE_DELAY = 150;
         const ATTACK_DELAY = 500; // 공격 딜레이 (밀리초)
         const TARGET_FPS = 60;
+        const HURT_DURATION = 500; // 피격 효과 지속 시간 (밀리초)
+        const HURT_BLINK_INTERVAL = 100; // 깜빡임 간격 (밀리초)
 
         // ===== 방향 정의 =====
         const DIRECTIONS = {
@@ -126,7 +170,8 @@
                 damage: 5,
                 color: '#00ff00',
                 moveDelay: 1000, // 느린 이동
-                size: 24
+                size: 24,
+                attackRange: 1 // 공격 범위
             },
             GOBLIN: {
                 name: '고블린',
@@ -134,7 +179,8 @@
                 damage: 8,
                 color: '#ff0000',
                 moveDelay: 700, // 보통 이동
-                size: 26
+                size: 26,
+                attackRange: 1
             },
             ORC: {
                 name: '오크',
@@ -142,7 +188,8 @@
                 damage: 12,
                 color: '#000000',
                 moveDelay: 400, // 빠른 이동
-                size: 28
+                size: 28,
+                attackRange: 1
             }
         };
 
@@ -196,7 +243,7 @@
                 width: 25,
                 height: 18,
                 portalTo: 'HUNTING',
-                spawnPoint: { x: 12, y: 8 },
+                spawnPoint: { x: 1, y: 1 },
                 portalLocation: { x: 12, y: 16 },
                 monsters: [] // 마을에는 몬스터 없음
             },
@@ -243,18 +290,21 @@
 
         // ===== 플레이어 객체 정의 =====
         const player = {
-            x: 12 * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2,
-            y: 8 * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2,
+            x: 1 * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2,
+            y: 1 * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2,
             width: PLAYER_SIZE,
             height: PLAYER_SIZE,
             color: '#3498db',
-            gridX: 12,
-            gridY: 8,
+            gridX: 1,
+            gridY: 1,
             direction: DIRECTIONS.DOWN,
             maxHealth: 100,
             health: 100,
             damage: 15,
-            isAttacking: false
+            isAttacking: false,
+            isDead: false,
+            isHurt: false,
+            hurtTime: 0
         };
 
         // ===== 몬스터 클래스 =====
@@ -274,7 +324,9 @@
                 this.health = monsterType.maxHealth;
                 this.damage = monsterType.damage;
                 this.moveDelay = monsterType.moveDelay;
+                this.attackRange = monsterType.attackRange;
                 this.lastMoveTime = 0;
+                this.lastAttackTime = 0;
                 this.isAggressive = false;
                 this.isDead = false;
             }
@@ -290,8 +342,37 @@
                 }
             }
 
+            getDistance(targetX, targetY) {
+                return Math.abs(this.gridX - targetX) + Math.abs(this.gridY - targetY);
+            }
+
+            canAttackPlayer() {
+                return this.getDistance(player.gridX, player.gridY) <= this.attackRange;
+            }
+
             update(currentTime) {
                 if (this.isDead || !this.isAggressive) return;
+
+                const distance = this.getDistance(player.gridX, player.gridY);
+
+                // 공격 범위 내에 있으면 공격
+                if (distance <= this.attackRange) {
+                    if (currentTime - this.lastAttackTime > this.moveDelay) {
+                        player.health -= this.damage;
+                        player.isHurt = true;
+                        player.hurtTime = currentTime;
+                        updatePlayerHealthUI();
+                        console.log(`${this.name}이(가) 플레이어를 공격! 데미지: ${this.damage}`);
+                        this.lastAttackTime = currentTime;
+                        
+                        if (player.health <= 0) {
+                            player.health = 0;
+                            player.isDead = true;
+                            gameOver();
+                        }
+                    }
+                    return; // 공격 후 이동하지 않음
+                }
 
                 // 이동 쿨다운 체크
                 if (currentTime - this.lastMoveTime < this.moveDelay) return;
@@ -310,26 +391,14 @@
                     newY += dy > 0 ? 1 : -1;
                 }
 
-                // 이동 가능한지 체크
-                if (canMoveTo(newX, newY) && !isMonsterAt(newX, newY)) {
+                // 이동 가능한지 체크 (플레이어 위치 포함)
+                if (canMoveTo(newX, newY) && !isMonsterAt(newX, newY) && 
+                    !(newX === player.gridX && newY === player.gridY)) {
                     this.gridX = newX;
                     this.gridY = newY;
                     this.x = this.gridX * TILE_SIZE + (TILE_SIZE - this.width) / 2;
                     this.y = this.gridY * TILE_SIZE + (TILE_SIZE - this.height) / 2;
                     this.lastMoveTime = currentTime;
-
-                    // 플레이어와 충돌 체크
-                    if (this.gridX === player.gridX && this.gridY === player.gridY) {
-                        player.health -= this.damage;
-                        updatePlayerHealthUI();
-                        console.log(`${this.name}이(가) 플레이어를 공격! 데미지: ${this.damage}`);
-                        
-                        if (player.health <= 0) {
-                            player.health = 0;
-                            console.log("게임 오버!");
-                            // TODO: 게임 오버 처리
-                        }
-                    }
                 }
             }
 
@@ -429,7 +498,10 @@
             // 몬스터 생성
             monsters = [];
             currentMapInfo.monsters.forEach(monsterData => {
-                monsters.push(new Monster(monsterData.type, monsterData.x, monsterData.y));
+                // 플레이어 위치와 겹치지 않는지 확인
+                if (!(monsterData.x === player.gridX && monsterData.y === player.gridY)) {
+                    monsters.push(new Monster(monsterData.type, monsterData.x, monsterData.y));
+                }
             });
             
             // UI 업데이트
@@ -509,49 +581,56 @@
          * 플레이어 이동 처리 함수
          */
         function updatePlayer(currentTime) {
+            // 플레이어가 죽었으면 입력 무시
+            if (player.isDead) return;
+            
             // 이동 쿨다운 체크
             if (currentTime - lastMoveTime < MOVE_DELAY) {
                 return;
             }
 
-            let moved = false;
+            let keyPressed = false;
+            let requestedDirection = null;
             let newGridX = player.gridX;
             let newGridY = player.gridY;
-            let newDirection = player.direction;
 
-            // 방향키 입력에 따른 이동 및 방향 설정
+            // 방향키 입력 확인
             if (keys.ArrowUp) {
-                newGridY = player.gridY - 1;
-                newDirection = DIRECTIONS.UP;
-                moved = true;
+                requestedDirection = DIRECTIONS.UP;
+                keyPressed = true;
             } else if (keys.ArrowDown) {
-                newGridY = player.gridY + 1;
-                newDirection = DIRECTIONS.DOWN;
-                moved = true;
+                requestedDirection = DIRECTIONS.DOWN;
+                keyPressed = true;
             } else if (keys.ArrowLeft) {
-                newGridX = player.gridX - 1;
-                newDirection = DIRECTIONS.LEFT;
-                moved = true;
+                requestedDirection = DIRECTIONS.LEFT;
+                keyPressed = true;
             } else if (keys.ArrowRight) {
-                newGridX = player.gridX + 1;
-                newDirection = DIRECTIONS.RIGHT;
-                moved = true;
+                requestedDirection = DIRECTIONS.RIGHT;
+                keyPressed = true;
             }
 
-            // 방향 업데이트 (이동하지 않아도 방향은 바뀜)
-            if (moved) {
-                player.direction = newDirection;
-            }
-
-            // 이동 처리
-            if (moved && canMoveTo(newGridX, newGridY) && !isMonsterAt(newGridX, newGridY)) {
-                player.gridX = newGridX;
-                player.gridY = newGridY;
-                player.x = player.gridX * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2;
-                player.y = player.gridY * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2;
-                lastMoveTime = currentTime;
+            if (keyPressed && requestedDirection) {
+                // 현재 바라보는 방향과 입력된 방향이 같은 경우에만 이동
+                if (player.direction === requestedDirection) {
+                    // 이동할 좌표 계산
+                    newGridX = player.gridX + requestedDirection.x;
+                    newGridY = player.gridY + requestedDirection.y;
+                    
+                    // 이동 가능한지 체크
+                    if (canMoveTo(newGridX, newGridY) && !isMonsterAt(newGridX, newGridY)) {
+                        player.gridX = newGridX;
+                        player.gridY = newGridY;
+                        player.x = player.gridX * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2;
+                        player.y = player.gridY * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2;
+                        
+                        handlePortal();
+                    }
+                } else {
+                    // 다른 방향을 눌렀을 때는 방향만 변경
+                    player.direction = requestedDirection;
+                }
                 
-                handlePortal();
+                lastMoveTime = currentTime;
             }
 
             // 공격 처리
@@ -618,10 +697,24 @@
             ctx.globalAlpha = 1.0;
 
             // 플레이어 그리기
-            ctx.fillStyle = player.color;
+            // 피격 시 깜빡임 효과
+            let playerColor = player.color;
+            if (player.isHurt) {
+                const elapsedTime = performance.now() - player.hurtTime;
+                if (elapsedTime < HURT_DURATION) {
+                    // 깜빡임 효과
+                    const blinkPhase = Math.floor(elapsedTime / HURT_BLINK_INTERVAL);
+                    playerColor = blinkPhase % 2 === 0 ? '#ff4444' : '#ff8888';
+                } else {
+                    // 피격 효과 종료
+                    player.isHurt = false;
+                }
+            }
+            
+            ctx.fillStyle = playerColor;
             ctx.fillRect(offsetX + player.x, offsetY + player.y, player.width, player.height);
             
-            ctx.strokeStyle = '#2980b9';
+            ctx.strokeStyle = player.isHurt ? '#ff0000' : '#2980b9';
             ctx.lineWidth = 2;
             ctx.strokeRect(offsetX + player.x, offsetY + player.y, player.width, player.height);
 
@@ -739,11 +832,52 @@
         }
 
         /**
+         * 게임 오버 처리
+         */
+        function gameOver() {
+            console.log("게임 오버!");
+            const gameOverOverlay = document.getElementById('gameOverOverlay');
+            gameOverOverlay.style.display = 'flex';
+        }
+
+        /**
+         * 게임 재시작
+         */
+        function restartGame() {
+            // 게임 오버 화면 숨기기
+            const gameOverOverlay = document.getElementById('gameOverOverlay');
+            gameOverOverlay.style.display = 'none';
+            
+            // 플레이어 초기화
+            player.health = player.maxHealth;
+            player.isDead = false;
+            player.isHurt = false;
+            player.hurtTime = 0;
+            player.direction = DIRECTIONS.DOWN;
+            player.isAttacking = false;
+            
+            // 첫 맵(마을)으로 이동
+            isFirstLoad = true;
+            changeMap('TOWN', false);
+            
+            // UI 업데이트
+            updatePlayerHealthUI();
+            
+            // 키 상태 초기화
+            Object.keys(keys).forEach(key => {
+                keys[key] = false;
+            });
+            
+            console.log("게임이 재시작되었습니다!");
+        }
+
+        /**
          * 게임 초기화 및 시작
          */
         function initGame() {
-            console.log('바람의나라 스타일 RPG - 전투 시스템 구현!');
+            console.log('바람의나라 스타일 RPG - 충돌 시스템 개선!');
             console.log('방향키로 이동, 스페이스바로 공격');
+            console.log('플레이어와 몬스터는 같은 타일에 위치할 수 없습니다.');
             
             // 이벤트 리스너 설정
             setupEventListeners();
