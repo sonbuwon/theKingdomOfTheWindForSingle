@@ -321,6 +321,7 @@
         let isFirstLoad = true;
         let monsters = [];
         let respawnQueue = []; // 리스폰 대기열
+        let lastPortalUsed = null; // 마지막으로 사용한 포탈 정보
 
         // ===== 캔버스 및 컨텍스트 초기화 =====
         const canvas = document.getElementById('gameCanvas');
@@ -642,9 +643,20 @@
             currentMapInfo = MAPS[currentMapKey];
             
             // 플레이어 위치 설정
-            if (fromPortal && !isFirstLoad) {
-                player.gridX = currentMapInfo.portalLocation.x;
-                player.gridY = currentMapInfo.portalLocation.y;
+            if (fromPortal && !isFirstLoad && lastPortalUsed) {
+                // 포탈을 통해 왔을 때, 해당 포탈의 반환 위치로 이동
+                const returnPortal = currentMapInfo.portals.find(p => 
+                    p.destination === lastPortalUsed.fromMap
+                );
+                
+                if (returnPortal) {
+                    player.gridX = returnPortal.x;
+                    player.gridY = returnPortal.y;
+                } else {
+                    // 반환 포탈을 찾을 수 없으면 기본 스폰 위치
+                    player.gridX = currentMapInfo.spawnPoint.x;
+                    player.gridY = currentMapInfo.spawnPoint.y;
+                }
             } else {
                 player.gridX = currentMapInfo.spawnPoint.x;
                 player.gridY = currentMapInfo.spawnPoint.y;
@@ -686,6 +698,13 @@
                 if (portal) {
                     const targetMap = portal.destination;
                     console.log(`${MAPS[targetMap].name}(으)로 이동합니다!`);
+                    
+                    // 사용한 포탈 정보 저장
+                    lastPortalUsed = {
+                        fromMap: currentMapKey,
+                        portal: portal
+                    };
+                    
                     changeMap(targetMap, true);
                 }
             }
@@ -1027,6 +1046,7 @@
             
             // 첫 맵(마을)으로 이동
             isFirstLoad = true;
+            lastPortalUsed = null;
             changeMap('TOWN', false);
             
             // UI 업데이트
